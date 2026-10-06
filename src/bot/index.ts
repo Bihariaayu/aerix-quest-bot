@@ -66,6 +66,12 @@ export function createDiscordBot(botToken: string, withMessageContent = true): C
 			await registerCommands(botToken, client.user.id, guildIds);
 		}
 
+		// Restore any in-flight quest tasks interrupted by restart/update
+		const recovered = await taskManager.restoreTasks(client);
+		if (recovered > 0) {
+			console.log(`[Recovery] Successfully restored and resumed ${recovered} active task(s).`);
+		}
+
 		// Initialize background quest watcher for auto-pilot accounts
 		autoQuestWatcher.start(client);
 		console.log(`[System] Auto-pilot active accounts: ${linkManager.getAutoCompleteAccounts().length}`);
@@ -1204,16 +1210,21 @@ export async function startDiscordBot(): Promise<void> {
 		}
 	}
 
-	const shutdown = async () => {
-		console.log('\n[System] Shutting down bot gracefully...');
+	const shutdown = async (signal?: string) => {
+		console.log(`\n[System] Received ${signal || 'shutdown signal'}. Saving state and shutting down gracefully...`);
+		try {
+			await taskManager.gracefulShutdown();
+		} catch (err: any) {
+			console.error('[System] Error during task manager shutdown:', err.message);
+		}
 		try {
 			await client.destroy();
 		} catch {}
 		process.exit(0);
 	};
 
-	process.on('SIGINT', shutdown);
-	process.on('SIGTERM', shutdown);
+	process.on('SIGINT', () => shutdown('SIGINT'));
+	process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 // Start bot if run directly

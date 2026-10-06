@@ -1,19 +1,44 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { GatewayDispatchEvents } from 'discord-api-types/v10';
+import { EmbedBuilder, Client as DiscordClient } from 'discord.js';
 import { ClientQuest } from '../client';
 import { Utils } from '../utils';
-import type { QuestUserTask, QuestItemProgress, TaskStatus, ExecutionMode } from './types';
+import { linkManager } from './linkManager';
+import { toSmallCaps, THEME_PURPLE } from './embeds';
+import type { QuestUserTask, QuestItemProgress, TaskStatus, ExecutionMode, TargetUserInfo } from './types';
 import type { QuestTaskConfigType } from '../interface';
+
+export interface PersistedTask {
+	id: string;
+	userId: string;
+	discordTag: string;
+	userToken: string;
+	targetUser: TargetUserInfo;
+	status: 'queued' | 'running';
+	mode: ExecutionMode;
+	startedAt: string;
+}
 
 export class TaskManager {
 	private readonly maxConcurrent: number;
+	private readonly filePath: string;
 	private readonly runningTasks = new Map<string, QuestUserTask>();
 	private readonly queuedTasks: QuestUserTask[] = [];
 	private readonly completedTaskHistory = new Map<string, QuestUserTask>();
 
-	constructor(maxConcurrent?: number) {
+	constructor(maxConcurrent?: number, dataDir?: string) {
 		const envMax = Number(process.env.MAX_CONCURRENT_USERS);
 		this.maxConcurrent = maxConcurrent ?? (Number.isInteger(envMax) && envMax > 0 ? envMax : 5);
+
+		const dir = dataDir || path.resolve(process.cwd(), 'data');
+		if (!fs.existsSync(dir)) {
+			try {
+				fs.mkdirSync(dir, { recursive: true });
+			} catch {}
+		}
+		this.filePath = path.join(dir, 'active_tasks.json');
 	}
 
 	public getMaxConcurrent(): number {
@@ -39,6 +64,170 @@ export class TaskManager {
 	public getQueuePosition(userId: string): number {
 		const index = this.queuedTasks.findIndex((t) => t.userId === userId);
 		return index >= 0 ? index + 1 : 0;
+	}
+
+	private saveActiveTasks(): void {
+		try {
+			const persisted: PersistedTask[] = [];
+
+			for (const task of this.runningTasks.values()) {
+				if (task.status === 'running' && task.userToken) {
+					persisted.push({
+						id: task.id,
+						userId: task.userId,
+						discordTag: task.discordTag,
+						userToken: task.userToken,
+						targetUser: task.targetUser,
+						status: 'running',
+						mode: task.mode || 'one_by_one',
+						startedAt: task.startedAt?.toISOString() || new Date().toISOString(),
+					});
+				}
+			}
+
+			for (const task of this.queuedTasks) {
+				if (task.status === 'queued' && task.userToken) {
+					persisted.push({
+						id: task.id,
+						userId: task.userId,
+						discordTag: task.discordTag,
+						userToken: task.userToken,
+						targetUser: task.targetUser,
+						status: 'queued',
+						mode: task.mode || 'one_by_one',
+						startedAt: task.startedAt?.toISOString() || new Date().toISOString(),
+					});
+				}
+			}
+
+			fs.writeFileSync(this.filePath, JSON.stringify(persisted, null, 2), 'utf-8');
+		} catch (err: any) {
+			console.error('[TaskManager] Failed to save active tasks to disk:', err.message);
+		}
+	}
+
+	public async gracefulShutdown(): Promise<void> {
+		console.log('[TaskManager] Performing graceful shutdown of active quest tasks...');
+		this.saveActiveTasks();
+
+		// Abort running gateway clients cleanly
+		for (const task of this.runningTasks.values()) {
+			try {
+				task.clientQuest?.abort();
+			} catch {}
+		}
+	}
+
+	public async restoreTasks(discordClient?: DiscordClient): Promise<number> {
+		if (!fs.existsSync(this.filePath)) return 0;
+
+		let persisted: PersistedTask[] = [];
+		try {
+			const raw = fs.readFileSync(this.filePath, 'utf-8');
+			persisted = JSON.parse(raw);
+		} catch (err: any) {
+			console.error('[TaskManager] Could not read active_tasks.json for recovery:', err.message);
+			return 0;
+		}
+
+		if (!Array.isArray(persisted) || persisted.length === 0) {
+			return 0;
+		}
+
+		console.log(`[Recovery] Found ${persisted.length} interrupted task(s) from previous daemon session. Resuming...`);
+
+		let restoredCount = 0;
+		for (const item of persisted) {
+			// Don't duplicate if already running or queued
+			if (this.runningTasks.has(item.userId) || this.queuedTasks.some((t) => t.userId === item.userId)) {
+				continue;
+			}
+
+			// Validate token (fallback to linkManager if wiped)
+			let token = item.userToken;
+			if (!token) {
+				const linked = linkManager.getLinkedAccount(item.userId);
+				if (linked?.userToken) {
+					token = linked.userToken;
+				}
+			}
+
+			if (!token) {
+				console.warn(`[Recovery] Skipping task for @${item.discordTag}: No credentials available.`);
+				continue;
+			}
+
+			try {
+				console.log(`[Recovery] Resuming quest task for @${item.discordTag} (${item.userId}) [Mode: ${item.mode}]...`);
+
+				// Notify user in DM that their quest has resumed after restart
+				if (discordClient) {
+					try {
+						const user = await discordClient.users.fetch(item.userId);
+						const headerBox =
+							'```prolog\n' +
+							`┌── ${toSmallCaps('SERVICE RECOVERY')} ───────────────────────┐\n` +
+							`│ RESUMING UNFINISHED QUEST EXECUTION          │\n` +
+							'└──────────────────────────────────────────────┘\n' +
+							'```';
+
+						const recoveryEmbed = new EmbedBuilder()
+							.setColor(THEME_PURPLE)
+							.setAuthor({ name: `AERIX QUEST · ${toSmallCaps('AUTO RECOVERY')}` })
+							.setDescription(
+								`${headerBox}\n` +
+									`The bot service has restarted or updated.\n\n` +
+									`Your quest auto-completion task has been **automatically resumed** in the background.\n` +
+									`Any remaining uncompleted quests will be finished as scheduled.`,
+							)
+							.setFooter({ text: `AERIX QUEST INFRASTRUCTURE · RESILIENCE ENGINE` });
+
+						await user.send({ embeds: [recoveryEmbed] });
+					} catch {}
+				}
+
+				// Launch the task
+				await this.startTask(
+					item.userId,
+					item.discordTag,
+					token,
+					async (task) => {
+						if (task.status === 'completed' && discordClient) {
+							try {
+								const user = await discordClient.users.fetch(item.userId);
+								const completeBox =
+									'```prolog\n' +
+									`┌── ${toSmallCaps('EXECUTION SUCCESS')} ─────────────────────┐\n` +
+									`│ ALL ELIGIBLE QUESTS COMPLETED                │\n` +
+									'└──────────────────────────────────────────────┘\n' +
+									'```';
+
+								const completeEmbed = new EmbedBuilder()
+									.setColor(THEME_PURPLE)
+									.setAuthor({ name: `AERIX QUEST · ${toSmallCaps('RECOVERY SUCCESS')}` })
+									.setDescription(
+										`${completeBox}\n` +
+											`All **${task.totalQuests}** quest(s) have been successfully completed.\n` +
+											`Rewards have been accredited to your Discord account.`,
+									)
+									.setFooter({ text: `AERIX QUEST INFRASTRUCTURE · COMPLETED` });
+
+								await user.send({ embeds: [completeEmbed] });
+							} catch {}
+						}
+					},
+					item.mode || 'one_by_one',
+				);
+
+				restoredCount++;
+			} catch (err: any) {
+				console.error(`[Recovery] Failed to resume task for @${item.discordTag}:`, err.message);
+			}
+		}
+
+		// Save updated state
+		this.saveActiveTasks();
+		return restoredCount;
 	}
 
 	public async startTask(
@@ -77,10 +266,12 @@ export class TaskManager {
 
 		if (this.runningTasks.size < this.maxConcurrent) {
 			this.runningTasks.set(userId, task);
+			this.saveActiveTasks();
 			this.runTask(task);
 		} else {
 			this.queuedTasks.push(task);
 			task.status = 'queued';
+			this.saveActiveTasks();
 			task.onUpdate?.(task);
 		}
 
@@ -100,6 +291,7 @@ export class TaskManager {
 			this.completedTaskHistory.set(userId, running);
 			running.userToken = '';
 			running.clientQuest = undefined;
+			this.saveActiveTasks();
 			running.onUpdate?.(running);
 			this.processQueue();
 			return true;
@@ -113,6 +305,7 @@ export class TaskManager {
 			queued.endedAt = new Date();
 			queued.userToken = '';
 			this.completedTaskHistory.set(userId, queued);
+			this.saveActiveTasks();
 			queued.onUpdate?.(queued);
 			return true;
 		}
@@ -125,6 +318,7 @@ export class TaskManager {
 			const nextTask = this.queuedTasks.shift();
 			if (nextTask && nextTask.status === 'queued') {
 				this.runningTasks.set(nextTask.userId, nextTask);
+				this.saveActiveTasks();
 				this.runTask(nextTask);
 			}
 		}
@@ -300,6 +494,7 @@ export class TaskManager {
 			task.clientQuest = undefined;
 			this.runningTasks.delete(task.userId);
 			this.completedTaskHistory.set(task.userId, task);
+			this.saveActiveTasks();
 			task.onUpdate?.(task);
 			this.processQueue();
 		}

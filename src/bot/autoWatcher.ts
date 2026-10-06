@@ -27,10 +27,10 @@ export class AutoQuestWatcher {
 
 		console.log(`[Auto-Pilot] Quest Watcher initialized (Interval: ${(intervalMs / 60000).toFixed(0)}m).`);
 
-		// Initial check 15 seconds after bot connects
+		// Initial check 5 seconds after bot connects
 		setTimeout(() => {
 			this.scanAll().catch((err) => console.error('[Auto-Pilot] Initial scan error:', err.message));
-		}, 15_000);
+		}, 5_000);
 
 		// Recurring interval
 		this.timer = setInterval(() => {
