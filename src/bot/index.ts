@@ -69,6 +69,26 @@ export function createDiscordBot(botToken: string, withMessageContent = true): C
 		}
 	});
 
+	client.on(Events.Error, (error) => {
+		console.error('[System Error] Discord Client:', error);
+	});
+
+	client.on(Events.ShardError, (error, shardId) => {
+		console.error(`[System Error] Shard ${shardId}:`, error);
+	});
+
+	client.on(Events.ShardDisconnect, (event, shardId) => {
+		console.warn(`[System Warning] Shard ${shardId} disconnected (code ${event.code}). Auto-reconnecting...`);
+	});
+
+	client.on(Events.ShardReconnecting, (shardId) => {
+		console.log(`[System Info] Shard ${shardId} reconnecting to Gateway...`);
+	});
+
+	client.on(Events.ShardResume, (shardId, replayedEvents) => {
+		console.log(`[System Info] Shard ${shardId} resumed connection (${replayedEvents} events replayed).`);
+	});
+
 	client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 		try {
 			if (interaction.isChatInputCommand()) {
