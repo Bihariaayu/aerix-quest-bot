@@ -122,36 +122,29 @@ export async function registerCommands(
 		});
 		console.log('Successfully registered global application (slash) commands.');
 
+		// Purge any guild-specific commands so Discord never displays duplicate slash commands!
 		for (const guildId of guildIds) {
 			try {
-				console.log(`Registering guild application commands for guild ${guildId}...`);
 				await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-					body: allCommands,
+					body: [],
 				});
-				console.log(`Successfully registered guild commands for guild ${guildId}.`);
-			} catch (guildErr) {
-				console.error(`Failed to register guild commands for guild ${guildId}:`, guildErr);
-			}
+			} catch {}
 		}
 	} catch (error) {
 		console.error('Failed to register application commands:', error);
 	}
 }
 
-export async function registerGuildCommands(
+export async function clearGuildCommands(
 	botToken: string,
 	clientId: string,
 	guildId: string,
 ): Promise<void> {
 	const rest = new REST({ version: '10' }).setToken(botToken);
 	try {
-		console.log(`Registering guild application commands for guild ${guildId}...`);
 		await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-			body: allCommands,
+			body: [],
 		});
-		console.log(`Successfully registered guild commands for guild ${guildId}.`);
-	} catch (err) {
-		console.error(`Failed to register guild commands for guild ${guildId}:`, err);
-	}
+	} catch {}
 }
 

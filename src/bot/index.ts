@@ -30,7 +30,7 @@ import {
 	createModeSelectionActionRow,
 	toSmallCaps,
 } from './embeds';
-import { registerCommands, registerGuildCommands } from './commands';
+import { registerCommands, clearGuildCommands } from './commands';
 import type { QuestUserTask, ExecutionMode } from './types';
 
 export const PREFIX = 'c?';
@@ -66,8 +66,8 @@ export function createDiscordBot(botToken: string, withMessageContent = true): C
 
 	client.on(Events.GuildCreate, async (guild) => {
 		if (client.user?.id) {
-			console.log(`[System] Joined guild ${guild.name} (${guild.id}), registering commands...`);
-			await registerGuildCommands(botToken, client.user.id, guild.id);
+			console.log(`[System] Joined guild ${guild.name} (${guild.id}), ensuring no duplicate commands...`);
+			await clearGuildCommands(botToken, client.user.id, guild.id);
 		}
 	});
 
