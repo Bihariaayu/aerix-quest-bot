@@ -1,6 +1,7 @@
 import type { ClientQuest } from '../client';
 
 export type TaskStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'failed';
+export type ExecutionMode = 'one_by_one' | 'all_at_once';
 
 export interface QuestItemProgress {
 	id: string;
@@ -28,6 +29,7 @@ export interface QuestUserTask {
 	userToken: string;
 	targetUser: TargetUserInfo;
 	status: TaskStatus;
+	mode?: ExecutionMode;
 	quests: QuestItemProgress[];
 	completedQuests: number;
 	totalQuests: number;

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { GatewayDispatchEvents } from 'discord-api-types/v10';
 import { ClientQuest } from '../client';
 import { Utils } from '../utils';
-import type { QuestUserTask, QuestItemProgress, TaskStatus } from './types';
+import type { QuestUserTask, QuestItemProgress, TaskStatus, ExecutionMode } from './types';
 import type { QuestTaskConfigType } from '../interface';
 
 export class TaskManager {
@@ -46,6 +46,7 @@ export class TaskManager {
 		discordTag: string,
 		userToken: string,
 		onUpdate?: (task: QuestUserTask) => void,
+		mode: ExecutionMode = 'one_by_one',
 	): Promise<QuestUserTask> {
 		// Check if user already has an active or queued task
 		const existing = this.runningTasks.get(userId) || this.queuedTasks.find((t) => t.userId === userId);
@@ -67,6 +68,7 @@ export class TaskManager {
 			userToken: clean,
 			targetUser: validation.user,
 			status: 'queued',
+			mode,
 			quests: [],
 			completedQuests: 0,
 			totalQuests: 0,
@@ -231,10 +233,11 @@ export class TaskManager {
 				return;
 			}
 
-			// Process valid quests concurrently
-			await Promise.allSettled(
-				validQuests.map(async (quest) => {
-					if (this.isCancelled(task)) return;
+			// Process valid quests according to selected mode
+			if (task.mode === 'one_by_one') {
+				// Sequential: execute quests one by one in order
+				for (const quest of validQuests) {
+					if (this.isCancelled(task)) break;
 					const questItem = task.quests.find((q) => q.id === quest.id);
 					if (questItem) questItem.status = 'in_progress';
 					task.onUpdate?.(task);
@@ -250,8 +253,34 @@ export class TaskManager {
 							questItem.details = err?.message || 'Error executing quest';
 						}
 					}
-				}),
-			);
+					task.completedQuests = task.quests.filter((q) => q.status === 'completed').length;
+					task.onUpdate?.(task);
+				}
+			} else {
+				// Concurrent: execute all quests at the same time
+				await Promise.allSettled(
+					validQuests.map(async (quest) => {
+						if (this.isCancelled(task)) return;
+						const questItem = task.quests.find((q) => q.id === quest.id);
+						if (questItem) questItem.status = 'in_progress';
+						task.onUpdate?.(task);
+						try {
+							await client!.questManager!.doingQuest(quest);
+							if (questItem && quest.isCompleted()) {
+								questItem.status = 'completed';
+								questItem.percent = 100;
+							}
+						} catch (err: any) {
+							if (questItem) {
+								questItem.status = 'failed';
+								questItem.details = err?.message || 'Error executing quest';
+							}
+						}
+						task.completedQuests = task.quests.filter((q) => q.status === 'completed').length;
+						task.onUpdate?.(task);
+					}),
+				);
+			}
 
 			if (!this.isCancelled(task)) {
 				task.status = 'completed';

@@ -14,6 +14,16 @@ export const questCommand = new SlashCommandBuilder()
 			.setDescription('Start auto-completing Discord Quests on your account')
 			.addStringOption((opt) =>
 				opt
+					.setName('mode')
+					.setDescription('Execution strategy: one by one or all at same time')
+					.setRequired(false)
+					.addChoices(
+						{ name: 'ONE BY ONE (Sequential · Recommended)', value: 'one_by_one' },
+						{ name: 'ALL AT ONCE (Concurrent · Fast)', value: 'all_at_once' },
+					),
+			)
+			.addStringOption((opt) =>
+				opt
 					.setName('token')
 					.setDescription('Optional: Paste your personal Discord user token directly')
 					.setRequired(false),

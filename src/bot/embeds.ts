@@ -81,6 +81,8 @@ export function createQuestStatusEmbed(
 	const now = task.endedAt ? task.endedAt.getTime() : Date.now();
 	const elapsed = task.startedAt ? formatDuration(now - task.startedAt.getTime()) : '00m 00s';
 
+	const modeLabel = task.mode === 'all_at_once' ? 'ALL AT ONCE [CONCURRENT]' : 'ONE BY ONE [SEQUENTIAL]';
+
 	// Closed box header
 	const headerBox =
 		'```prolog\n' +
@@ -88,6 +90,7 @@ export function createQuestStatusEmbed(
 		`│ OPERATOR   : @${targetUser.username}\n` +
 		`│ IDENTIFIER : ${targetUser.id}\n` +
 		`│ STATUS     : ${statusLabel}\n` +
+		`│ STRATEGY   : ${modeLabel}\n` +
 		`│ DURATION   : ${elapsed}\n` +
 		`│ CAPACITY   : [${runningCount}/${maxConcurrent} SLOTS]\n` +
 		'└──────────────────────────────────────────────┘\n' +
@@ -470,4 +473,43 @@ export function createChannelClearedEmbed(): EmbedBuilder {
 			text: `AERIX QUEST INFRASTRUCTURE · CONFIGURATION SAVED`,
 		});
 }
+
+export function createModeSelectionEmbed(): EmbedBuilder {
+	const headerBox =
+		'```prolog\n' +
+		`┌── ${toSmallCaps('EXECUTION STRATEGY')} ────────────────────┐\n` +
+		`│ SELECT QUEST COMPLETION DISPATCH MODE        │\n` +
+		'└──────────────────────────────────────────────┘\n' +
+		'```';
+
+	return new EmbedBuilder()
+		.setColor(THEME_PURPLE)
+		.setAuthor({ name: `AERIX QUEST · ${toSmallCaps('DISPATCH MODE')}` })
+		.setDescription(
+			`${headerBox}\n` +
+				`Choose how you want your Discord Quests to be processed:\n\n` +
+				`◈ **ONE BY ONE** · *Sequential*\n` +
+				`  └─ Processes quests one after another in order. Recommended for stability.\n\n` +
+				`◈ **ALL AT ONCE** · *Concurrent*\n` +
+				`  └─ Processes all eligible quests in parallel at the same time. Faster execution.\n\n` +
+				`Select a strategy below to begin execution:`,
+		)
+		.setFooter({
+			text: `AERIX QUEST INFRASTRUCTURE · STRATEGY SELECTION`,
+		});
+}
+
+export function createModeSelectionActionRow(): ActionRowBuilder<ButtonBuilder> {
+	return new ActionRowBuilder<ButtonBuilder>().addComponents(
+		new ButtonBuilder()
+			.setCustomId('btn_mode_one_by_one')
+			.setLabel('ONE BY ONE')
+			.setStyle(ButtonStyle.Primary),
+		new ButtonBuilder()
+			.setCustomId('btn_mode_all_at_once')
+			.setLabel('ALL AT ONCE')
+			.setStyle(ButtonStyle.Secondary),
+	);
+}
+
 

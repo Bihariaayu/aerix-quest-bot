@@ -26,10 +26,12 @@ import {
 	createChannelRestrictionEmbed,
 	createChannelConfiguredEmbed,
 	createChannelClearedEmbed,
+	createModeSelectionEmbed,
+	createModeSelectionActionRow,
 	toSmallCaps,
 } from './embeds';
 import { registerCommands, registerGuildCommands } from './commands';
-import type { QuestUserTask } from './types';
+import type { QuestUserTask, ExecutionMode } from './types';
 
 export const PREFIX = 'c?';
 
@@ -349,7 +351,20 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 				return;
 			}
 
-			await startQuestFromMessage(message, linked.userToken, linked.targetUser);
+			const lowerParam = param.toLowerCase();
+			if (lowerParam.includes('all') || lowerParam.includes('concurrent') || lowerParam.includes('multi') || lowerParam.includes('same')) {
+				await startQuestFromMessage(message, linked.userToken, linked.targetUser, 'all_at_once');
+				return;
+			}
+			if (lowerParam.includes('one') || lowerParam.includes('seq') || lowerParam.includes('single') || lowerParam === '1') {
+				await startQuestFromMessage(message, linked.userToken, linked.targetUser, 'one_by_one');
+				return;
+			}
+
+			await message.reply({
+				embeds: [createModeSelectionEmbed()],
+				components: [createModeSelectionActionRow()],
+			});
 			break;
 		}
 
@@ -416,9 +431,11 @@ async function startQuestFromMessage(
 	message: Message,
 	token: string,
 	targetUser: { username: string },
+	mode: ExecutionMode = 'one_by_one',
 ): Promise<void> {
+	const modeLabel = mode === 'all_at_once' ? 'ALL AT ONCE' : 'ONE BY ONE';
 	const initialMsg = await message.reply({
-		content: `◈ INITIALIZING: Quest execution dispatching for @${targetUser.username}...`,
+		content: `◈ INITIALIZING: Quest execution dispatching for @${targetUser.username} [${modeLabel}]...`,
 	});
 
 	let lastEditTime = 0;
@@ -478,6 +495,7 @@ async function startQuestFromMessage(
 			(updatedTask) => {
 				updateMessage(updatedTask);
 			},
+			mode,
 		);
 		await updateMessage(task);
 	} catch (err: any) {
@@ -642,24 +660,44 @@ async function handleChatInput(interaction: ChatInputCommandInteraction): Promis
 				break;
 			}
 			case 'start': {
+				const modeOpt = interaction.options.getString('mode') as ExecutionMode | null;
 				const tokenOpt = interaction.options.getString('token')?.trim();
+
 				if (tokenOpt) {
-					await interaction.deferReply({ ephemeral: true });
 					if (!linkManager.getLinkedAccount(interaction.user.id)) {
 						try {
 							await linkManager.linkAccount(interaction.user.id, tokenOpt);
 						} catch {}
 					}
-					await startQuestFromInteraction(interaction, tokenOpt);
-					return;
+					if (modeOpt) {
+						await interaction.deferReply({ ephemeral: true });
+						await startQuestFromInteraction(interaction, tokenOpt, modeOpt);
+						return;
+					} else {
+						await interaction.reply({
+							embeds: [createModeSelectionEmbed()],
+							components: [createModeSelectionActionRow()],
+							ephemeral: true,
+						});
+						return;
+					}
 				}
 
-				// If user already has a linked account, start directly without asking for token!
+				// If user already has a linked account
 				const linked = linkManager.getLinkedAccount(interaction.user.id);
 				if (linked) {
-					await interaction.deferReply({ ephemeral: true });
-					await startQuestFromInteraction(interaction, linked.userToken);
-					return;
+					if (modeOpt) {
+						await interaction.deferReply({ ephemeral: true });
+						await startQuestFromInteraction(interaction, linked.userToken, modeOpt);
+						return;
+					} else {
+						await interaction.reply({
+							embeds: [createModeSelectionEmbed()],
+							components: [createModeSelectionActionRow()],
+							ephemeral: true,
+						});
+						return;
+					}
 				}
 
 				// Otherwise open the modal for manual entry
@@ -773,28 +811,33 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
 		return;
 	}
 
-	if (customId === 'btn_start_linked_quest') {
-		const linked = linkManager.getLinkedAccount(interaction.user.id);
-		if (!linked) {
-			const modal = createLinkModal('modal_link_token');
-			await interaction.showModal(modal);
-			return;
-		}
-		await interaction.deferReply({ ephemeral: true });
-		await startQuestFromInteraction(interaction, linked.userToken);
-		return;
-	}
-
-	if (customId === 'btn_start_quest') {
+	if (customId === 'btn_start_linked_quest' || customId === 'btn_start_quest') {
 		const linked = linkManager.getLinkedAccount(interaction.user.id);
 		if (linked) {
-			await interaction.deferReply({ ephemeral: true });
-			await startQuestFromInteraction(interaction, linked.userToken);
+			await interaction.reply({
+				embeds: [createModeSelectionEmbed()],
+				components: [createModeSelectionActionRow()],
+				ephemeral: true,
+			});
 			return;
 		}
 
 		const modal = createTokenModal('modal_quest_token');
 		await interaction.showModal(modal);
+		return;
+	}
+
+	if (customId === 'btn_mode_one_by_one' || customId === 'btn_mode_all_at_once') {
+		const mode: ExecutionMode = customId === 'btn_mode_all_at_once' ? 'all_at_once' : 'one_by_one';
+		const linked = linkManager.getLinkedAccount(interaction.user.id);
+		if (!linked) {
+			const modal = createTokenModal('modal_quest_token');
+			await interaction.showModal(modal);
+			return;
+		}
+
+		await interaction.deferReply({ ephemeral: true });
+		await startQuestFromInteraction(interaction, linked.userToken, mode);
 		return;
 	}
 
@@ -885,6 +928,7 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<v
 async function startQuestFromInteraction(
 	interaction: ChatInputCommandInteraction | ModalSubmitInteraction | ButtonInteraction,
 	token: string,
+	mode: ExecutionMode = 'one_by_one',
 ): Promise<void> {
 	let lastEditTime = 0;
 	let editTimeout: NodeJS.Timeout | null = null;
@@ -949,6 +993,7 @@ async function startQuestFromInteraction(
 			(updatedTask) => {
 				updateInteraction(updatedTask);
 			},
+			mode,
 		);
 		await updateInteraction(task);
 	} catch (err: any) {
