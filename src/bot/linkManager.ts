@@ -1,13 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Utils } from '../utils';
-import type { TargetUserInfo } from './types';
+import type { TargetUserInfo, ExecutionMode } from './types';
 
 export interface LinkedAccount {
 	discordUserId: string;
 	userToken: string;
 	targetUser: TargetUserInfo;
 	linkedAt: string;
+	autoComplete?: boolean;
+	autoMode?: ExecutionMode;
 }
 
 export class LinkManager {
@@ -82,6 +84,31 @@ export class LinkManager {
 			this.save();
 		}
 		return existed;
+	}
+
+	public setAutoComplete(discordUserId: string, enabled: boolean, mode: ExecutionMode = 'one_by_one'): LinkedAccount | null {
+		this.load();
+		const account = this.accounts.get(discordUserId);
+		if (!account) return null;
+		account.autoComplete = enabled;
+		account.autoMode = mode;
+		this.save();
+		return account;
+	}
+
+	public toggleAutoComplete(discordUserId: string): { enabled: boolean; account: LinkedAccount | null } {
+		this.load();
+		const account = this.accounts.get(discordUserId);
+		if (!account) return { enabled: false, account: null };
+		account.autoComplete = !Boolean(account.autoComplete);
+		if (!account.autoMode) account.autoMode = 'one_by_one';
+		this.save();
+		return { enabled: account.autoComplete, account };
+	}
+
+	public getAutoCompleteAccounts(): LinkedAccount[] {
+		this.load();
+		return Array.from(this.accounts.values()).filter((a) => Boolean(a.autoComplete));
 	}
 
 	public getCount(): number {

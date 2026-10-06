@@ -62,6 +62,32 @@ export const questCommand = new SlashCommandBuilder()
 	)
 	.addSubcommand((sub) =>
 		sub
+			.setName('auto')
+			.setDescription('Toggle or configure automatic quest completion when new quests arrive')
+			.addStringOption((opt) =>
+				opt
+					.setName('state')
+					.setDescription('Enable, disable, or toggle auto-pilot')
+					.setRequired(false)
+					.addChoices(
+						{ name: 'ENABLE (Turn Auto-Pilot ON)', value: 'enable' },
+						{ name: 'DISABLE (Turn Auto-Pilot OFF)', value: 'disable' },
+						{ name: 'TOGGLE (Switch Current State)', value: 'toggle' },
+					),
+			)
+			.addStringOption((opt) =>
+				opt
+					.setName('mode')
+					.setDescription('Execution strategy when quests are auto-completed')
+					.setRequired(false)
+					.addChoices(
+						{ name: 'ONE BY ONE (Sequential · Recommended)', value: 'one_by_one' },
+						{ name: 'ALL AT ONCE (Concurrent · Fast)', value: 'all_at_once' },
+					),
+			),
+	)
+	.addSubcommand((sub) =>
+		sub
 			.setName('help')
 			.setDescription('Learn how to use the bot and safely get your Discord token'),
 	);
@@ -84,6 +110,31 @@ export const unlinkCommand = new SlashCommandBuilder()
 	.setName('unlink')
 	.setDescription('Unlink your Discord user account token from the bot');
 
+export const autoCommand = new SlashCommandBuilder()
+	.setName('auto')
+	.setDescription('Toggle automatic quest completion when new quests arrive')
+	.addStringOption((opt) =>
+		opt
+			.setName('state')
+			.setDescription('Enable, disable, or toggle auto-pilot')
+			.setRequired(false)
+			.addChoices(
+				{ name: 'ENABLE (Turn Auto-Pilot ON)', value: 'enable' },
+				{ name: 'DISABLE (Turn Auto-Pilot OFF)', value: 'disable' },
+				{ name: 'TOGGLE (Switch Current State)', value: 'toggle' },
+			),
+	)
+	.addStringOption((opt) =>
+		opt
+			.setName('mode')
+			.setDescription('Execution strategy when quests are auto-completed')
+			.setRequired(false)
+			.addChoices(
+				{ name: 'ONE BY ONE (Sequential · Recommended)', value: 'one_by_one' },
+				{ name: 'ALL AT ONCE (Concurrent · Fast)', value: 'all_at_once' },
+			),
+	);
+
 export const setChannelCommand = new SlashCommandBuilder()
 	.setName('setchannel')
 	.setDescription('(Admin) Restrict quest commands to a dedicated channel')
@@ -104,6 +155,7 @@ export const allCommands = [
 	questCommand.toJSON(),
 	linkCommand.toJSON(),
 	unlinkCommand.toJSON(),
+	autoCommand.toJSON(),
 	helpCommand.toJSON(),
 	setChannelCommand.toJSON(),
 	clearChannelCommand.toJSON(),

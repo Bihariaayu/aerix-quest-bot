@@ -90,7 +90,9 @@ If you want to use the quest bot, please use #quest-terminal.
 | Capability | Technical Implementation | Value |
 | :--- | :--- | :--- |
 | **Concurrent Multi-Tenancy** | Asynchronous FIFO task scheduler with dynamic slot limits (`MAX_CONCURRENT_USERS`). | Multiple users can run quests at the exact same moment without interference or rate-limiting collisions. |
-| **Persistent Credential Linking** | Encrypted local key-value store (`data/linked_accounts.json`) with auto-reloading. | Users associate credentials once via `/link` or `c?link` and execute on demand with a single click. |
+| **Background Auto-Pilot** | Continuous daemon scanner (every 20m) querying `/quests/@me` via browser-spoofed REST. | Automatically detects newly dropped Discord quests, dispatches worker tasks, and delivers completion notifications to your DMs. |
+| **Execution Strategy Selection** | Configurable execution modes: `ONE BY ONE` (sequential) or `ALL AT ONCE` (concurrent). | Select between rock-solid sequential processing or high-speed parallel completion across all eligible quests. |
+| **Persistent Credential Linking** | Encrypted local key-value store (`data/linked_accounts.json`) with auto-reloading. | Users associate credentials once via `/link` or `c?link` and execute on demand with a single click or let Auto-Pilot take over. |
 | **Universal Quest Engine** | Automated video chunk dispatching, gateway game spoofing, and embedded activity launch. | Solves every quest variant: `WATCH_VIDEO`, `PLAY_ON_DESKTOP`, `PLAY_ON_XBOX`, and `PLAY_ACTIVITY`. |
 | **Channel Governance** | Server-level channel routing engine with auto-redirection embeds and link buttons. | Keeps general server channels clean by isolating quest operations to designated channels. |
 | **Instant Guild Sync** | Dual-tier slash registration (`Routes.applicationGuildCommands` + `applicationCommands`). | Zero delay on command updates; changes appear in Discord clients instantly. |
@@ -213,9 +215,11 @@ The bot provides full parity across both **Slash Commands** (`/...`) and **Prefi
 
 | Slash Command | Prefix Command | Scope | Description |
 | :--- | :--- | :--- | :--- |
-| `/quest start [token]` | `c?start` | All Users | Initiates quest auto-completion. Uses linked token if available, or accepts direct token parameter. |
-| `/link [token]` | `c?link [token]` | All Users | Associates your user token with your Discord ID for instant 1-click execution. |
-| `/unlink` | `c?unlink` | All Users | Purges linked user credentials from the system. |
+| `/quest start [mode] [token]` | `c?start [mode]` | All Users | Initiates quest auto-completion. Choose `one_by_one` (sequential) or `all_at_once` (concurrent). |
+| `/auto [state] [mode]` | `c?auto [on/off]` | All Users | Toggles 24/7 background Auto-Pilot. Automatically detects and completes new quests when they drop. |
+| `/quest auto [state] [mode]` | `c?quest auto` | All Users | Subcommand alias to configure or toggle background Auto-Pilot. |
+| `/link [token]` | `c?link [token]` | All Users | Associates your user token with your Discord ID for instant 1-click execution and Auto-Pilot enrollment. |
+| `/unlink` | `c?unlink` | All Users | Purges linked user credentials from the system and disables Auto-Pilot. |
 | `/quest status` | `c?status` | All Users | Displays active queue position, runtime telemetry, and individual quest breakdown. |
 | `/quest stop` | `c?stop` | All Users | Immediately cancels your running or queued quest auto-completion worker. |
 | `/help` | `c?help` | All Users | Renders comprehensive token extraction manual and operational guides. |

@@ -23,6 +23,8 @@ import {
 	createLinkModal,
 	createLinkEmbed,
 	createLinkActionRow,
+	createAutoToggleEmbed,
+	createAutoToggleActionRow,
 	createChannelRestrictionEmbed,
 	createChannelConfiguredEmbed,
 	createChannelClearedEmbed,
@@ -30,6 +32,7 @@ import {
 	createModeSelectionActionRow,
 	toSmallCaps,
 } from './embeds';
+import { autoQuestWatcher } from './autoWatcher';
 import { registerCommands, clearGuildCommands } from './commands';
 import type { QuestUserTask, ExecutionMode } from './types';
 
@@ -62,6 +65,10 @@ export function createDiscordBot(botToken: string, withMessageContent = true): C
 			console.log(`[System] Registering commands for ${guildIds.length} connected guild(s): ${guildIds.join(', ')}`);
 			await registerCommands(botToken, client.user.id, guildIds);
 		}
+
+		// Initialize background quest watcher for auto-pilot accounts
+		autoQuestWatcher.start(client);
+		console.log(`[System] Auto-pilot active accounts: ${linkManager.getAutoCompleteAccounts().length}`);
 	});
 
 	client.on(Events.GuildCreate, async (guild) => {
@@ -162,7 +169,7 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 	// If command is "quest" and has a sub-command (e.g. "c?quest setchannel #channel" or "c?quest start")
 	if (command === 'quest' && args.length > 1) {
 		const sub = args[1].toLowerCase();
-		if (['start', 'stop', 'cancel', 'status', 'panel', 'help', 'setchannel', 'clearchannel', 'unsetchannel', 'resetchannel', 'channel'].includes(sub)) {
+		if (['start', 'stop', 'cancel', 'status', 'panel', 'help', 'setchannel', 'clearchannel', 'unsetchannel', 'resetchannel', 'channel', 'auto'].includes(sub)) {
 			command = sub;
 			param = args.slice(2).join(' ').trim();
 		}
@@ -198,9 +205,10 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 				`\`│ PREFIX  : ${PREFIX.padEnd(35)} │\`\n` +
 				`\`│ HELP    : ${(`${PREFIX}help or /help`).padEnd(35)} │\`\n` +
 				`\`│ LINK    : ${(`${PREFIX}link or /link`).padEnd(35)} │\`\n` +
+				`\`│ AUTO    : ${(`${PREFIX}auto or /auto`).padEnd(35)} │\`\n` +
 				`\`│ EXECUTE : ${(`${PREFIX}start or /quest start`).padEnd(35)} │\`\n` +
 				`\`└───────────────────────────────────────────────┘\``,
-			components: [linked ? createLinkActionRow(true) : createLinkActionRow(false)],
+			components: [createLinkActionRow(Boolean(linked), Boolean(linked?.autoComplete))],
 		});
 		return;
 	}
@@ -313,7 +321,7 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 					await message.reply({
 						content: message.guild ? '◈ NOTICE: Token string purged from channel for security.' : undefined,
 						embeds: [createLinkEmbed(linked)],
-						components: [createLinkActionRow(true)],
+						components: [createLinkActionRow(true, Boolean(linked.autoComplete))],
 					});
 				} catch (err: any) {
 					await message.reply({ content: `◈ ERROR: ${err?.message || 'Invalid credentials provided.'}` });
@@ -325,7 +333,7 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 			const linked = linkManager.getLinkedAccount(message.author.id);
 			await message.reply({
 				embeds: [createLinkEmbed(linked)],
-				components: [createLinkActionRow(Boolean(linked))],
+				components: [createLinkActionRow(Boolean(linked), Boolean(linked?.autoComplete))],
 			});
 			break;
 		}
@@ -336,6 +344,47 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 				await message.reply({ content: '◈ NOTICE: Account credentials successfully dissociated.' });
 			} else {
 				await message.reply({ content: '◈ NOTICE: No active credentials associated with this account.' });
+			}
+			break;
+		}
+
+		case 'auto':
+		case 'autopilot': {
+			const linked = linkManager.getLinkedAccount(message.author.id);
+			if (!linked) {
+				await message.reply({
+					content: '◈ NOTICE: No linked account credentials found.\nAssociate your Discord token first to enable Auto-Pilot.',
+					components: [createLinkActionRow(false)],
+				});
+				return;
+			}
+
+			const subArg = param.toLowerCase();
+			let targetState: boolean;
+			let targetMode: ExecutionMode = linked.autoMode || 'one_by_one';
+
+			if (subArg.includes('all') || subArg.includes('concurrent') || subArg.includes('multi')) {
+				targetMode = 'all_at_once';
+			} else if (subArg.includes('one') || subArg.includes('seq') || subArg.includes('single')) {
+				targetMode = 'one_by_one';
+			}
+
+			if (subArg.startsWith('on') || subArg.startsWith('enable') || subArg.startsWith('1') || subArg.startsWith('true')) {
+				targetState = true;
+			} else if (subArg.startsWith('off') || subArg.startsWith('disable') || subArg.startsWith('0') || subArg.startsWith('false')) {
+				targetState = false;
+			} else if (subArg.startsWith('status')) {
+				targetState = Boolean(linked.autoComplete);
+			} else {
+				targetState = !Boolean(linked.autoComplete);
+			}
+
+			const updated = linkManager.setAutoComplete(message.author.id, targetState, targetMode);
+			if (updated) {
+				await message.reply({
+					embeds: [createAutoToggleEmbed(updated, targetState)],
+					components: [createAutoToggleActionRow(targetState)],
+				});
 			}
 			break;
 		}
@@ -374,7 +423,7 @@ async function handleMessage(message: Message, client: Client): Promise<void> {
 				const linked = linkManager.getLinkedAccount(message.author.id);
 				await message.reply({
 					content: '◈ NOTICE: No active execution tasks found in queue.',
-					components: [linked ? createLinkActionRow(true) : createLinkActionRow(false)],
+					components: [linked ? createLinkActionRow(true, Boolean(linked.autoComplete)) : createLinkActionRow(false)],
 				});
 				return;
 			}
@@ -589,7 +638,7 @@ async function handleChatInput(interaction: ChatInputCommandInteraction): Promis
 				const linked = await linkManager.linkAccount(interaction.user.id, tokenOpt);
 				await interaction.editReply({
 					embeds: [createLinkEmbed(linked)],
-					components: [createLinkActionRow(true)],
+					components: [createLinkActionRow(true, Boolean(linked.autoComplete))],
 				});
 			} catch (err: any) {
 				await interaction.editReply({
@@ -602,7 +651,7 @@ async function handleChatInput(interaction: ChatInputCommandInteraction): Promis
 		const linked = linkManager.getLinkedAccount(interaction.user.id);
 		await interaction.reply({
 			embeds: [createLinkEmbed(linked)],
-			components: [createLinkActionRow(Boolean(linked))],
+			components: [createLinkActionRow(Boolean(linked), Boolean(linked?.autoComplete))],
 			ephemeral: true,
 		});
 		return;
@@ -614,6 +663,41 @@ async function handleChatInput(interaction: ChatInputCommandInteraction): Promis
 			await interaction.reply({ content: '◈ NOTICE: Account credentials dissociated.', ephemeral: true });
 		} else {
 			await interaction.reply({ content: '◈ NOTICE: No active credentials associated with this account.', ephemeral: true });
+		}
+		return;
+	}
+
+	if (commandName === 'auto') {
+		const linked = linkManager.getLinkedAccount(interaction.user.id);
+		if (!linked) {
+			await interaction.reply({
+				content: '◈ NOTICE: No linked account credentials found.\nAssociate your Discord token first to enable Auto-Pilot.',
+				components: [createLinkActionRow(false)],
+				ephemeral: true,
+			});
+			return;
+		}
+
+		const stateOpt = interaction.options.getString('state');
+		const modeOpt = interaction.options.getString('mode') as ExecutionMode | null;
+
+		let targetState: boolean;
+		if (stateOpt === 'enable') {
+			targetState = true;
+		} else if (stateOpt === 'disable') {
+			targetState = false;
+		} else {
+			targetState = !Boolean(linked.autoComplete);
+		}
+
+		const targetMode: ExecutionMode = modeOpt || linked.autoMode || 'one_by_one';
+		const updated = linkManager.setAutoComplete(interaction.user.id, targetState, targetMode);
+		if (updated) {
+			await interaction.reply({
+				embeds: [createAutoToggleEmbed(updated, targetState)],
+				components: [createAutoToggleActionRow(targetState)],
+				ephemeral: true,
+			});
 		}
 		return;
 	}
@@ -711,7 +795,7 @@ async function handleChatInput(interaction: ChatInputCommandInteraction): Promis
 					const linked = linkManager.getLinkedAccount(interaction.user.id);
 					await interaction.reply({
 						content: '◈ NOTICE: No active quest tasks found.\nSelect **`INITIALIZE`** to start execution.',
-						components: [linked ? createLinkActionRow(true) : createStatusActionRow('completed')],
+						components: [linked ? createLinkActionRow(true, Boolean(linked.autoComplete)) : createStatusActionRow('completed')],
 						ephemeral: true,
 					});
 					return;
@@ -725,6 +809,40 @@ async function handleChatInput(interaction: ChatInputCommandInteraction): Promis
 				);
 				const row = createStatusActionRow(task.status);
 				await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+				break;
+			}
+			case 'auto': {
+				const linked = linkManager.getLinkedAccount(interaction.user.id);
+				if (!linked) {
+					await interaction.reply({
+						content: '◈ NOTICE: No linked account credentials found.\nAssociate your Discord token first to enable Auto-Pilot.',
+						components: [createLinkActionRow(false)],
+						ephemeral: true,
+					});
+					return;
+				}
+
+				const stateOpt = interaction.options.getString('state');
+				const modeOpt = interaction.options.getString('mode') as ExecutionMode | null;
+
+				let targetState: boolean;
+				if (stateOpt === 'enable') {
+					targetState = true;
+				} else if (stateOpt === 'disable') {
+					targetState = false;
+				} else {
+					targetState = !Boolean(linked.autoComplete);
+				}
+
+				const targetMode: ExecutionMode = modeOpt || linked.autoMode || 'one_by_one';
+				const updated = linkManager.setAutoComplete(interaction.user.id, targetState, targetMode);
+				if (updated) {
+					await interaction.reply({
+						embeds: [createAutoToggleEmbed(updated, targetState)],
+						components: [createAutoToggleActionRow(targetState)],
+						ephemeral: true,
+					});
+				}
 				break;
 			}
 			case 'stop': {
@@ -841,6 +959,41 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
 		return;
 	}
 
+	if (customId === 'btn_toggle_auto') {
+		const linked = linkManager.getLinkedAccount(interaction.user.id);
+		if (!linked) {
+			await interaction.reply({
+				content: '◈ NOTICE: No linked account credentials found.\nAssociate your Discord token first to enable Auto-Pilot.',
+				components: [createLinkActionRow(false)],
+				ephemeral: true,
+			});
+			return;
+		}
+
+		const result = linkManager.toggleAutoComplete(interaction.user.id);
+		if (!result.account) {
+			await interaction.reply({
+				content: '◈ ERROR: Could not update auto-pilot state.',
+				ephemeral: true,
+			});
+			return;
+		}
+
+		const isLinkEmbed = interaction.message.embeds[0]?.author?.name?.includes('ACCOUNT REGISTRY');
+		if (isLinkEmbed) {
+			await interaction.update({
+				embeds: [createLinkEmbed(result.account)],
+				components: [createLinkActionRow(true, result.enabled)],
+			});
+		} else {
+			await interaction.update({
+				embeds: [createAutoToggleEmbed(result.account, result.enabled)],
+				components: [createAutoToggleActionRow(result.enabled)],
+			});
+		}
+		return;
+	}
+
 	if (customId === 'btn_help_quest') {
 		await interaction.reply({ embeds: [createHelpEmbed()], ephemeral: true });
 		return;
@@ -904,7 +1057,7 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<v
 			const linked = await linkManager.linkAccount(interaction.user.id, token);
 			await interaction.editReply({
 				embeds: [createLinkEmbed(linked)],
-				components: [createLinkActionRow(true)],
+				components: [createLinkActionRow(true, Boolean(linked.autoComplete))],
 			});
 		} catch (err: any) {
 			await interaction.editReply({

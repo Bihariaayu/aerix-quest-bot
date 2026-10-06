@@ -7,7 +7,8 @@ import {
 	TextInputBuilder,
 	TextInputStyle,
 } from 'discord.js';
-import type { QuestUserTask, TaskStatus } from './types';
+import type { QuestUserTask, TaskStatus, ExecutionMode } from './types';
+import type { LinkedAccount } from './linkManager';
 
 export const THEME_PURPLE = 0x6d28d9; // Deep Royal Purple
 
@@ -241,6 +242,7 @@ export function createHelpEmbed(): EmbedBuilder {
 		`**${toSmallCaps('COMMAND REFERENCE')}**\n` +
 		`\`◈\` \`/link\` · \`c?link\` ──── Associate account credentials\n` +
 		`\`◈\` \`/unlink\` · \`c?unlink\` ── Remove associated credentials\n` +
+		`\`◈\` \`/auto\` · \`c?auto\` ──── Toggle auto-pilot quest completion\n` +
 		`\`◈\` \`/quest start\` · \`c?start\` ─ Initialize quest execution\n` +
 		`\`◈\` \`/quest status\` · \`c?status\` ─ Inspect active session\n` +
 		`\`◈\` \`/quest stop\` · \`c?stop\` ── Terminate active session\n` +
@@ -301,7 +303,7 @@ export function createLinkModal(customId = 'modal_link_token'): ModalBuilder {
 }
 
 export function createLinkEmbed(
-	linked: { targetUser: { id: string; username: string; avatar: string | null; discriminator: string; global_name?: string | null }; linkedAt: string } | null,
+	linked: (LinkedAccount | { targetUser: { id: string; username: string; avatar: string | null; discriminator: string; global_name?: string | null }; linkedAt: string; autoComplete?: boolean; autoMode?: ExecutionMode }) | null,
 ): EmbedBuilder {
 	const embed = new EmbedBuilder();
 	embed.setColor(THEME_PURPLE);
@@ -312,7 +314,10 @@ export function createLinkEmbed(
 			? `https://cdn.discordapp.com/avatars/${targetUser.id}/${targetUser.avatar}.png`
 			: `https://cdn.discordapp.com/embed/avatars/${Number(targetUser.discriminator || '0') % 5}.png`;
 
-		const unixTimestamp = Math.floor(new Date(linked.linkedAt).getTime() / 1000);
+		const autoStatus = linked.autoComplete
+			? `ENABLED (${(linked.autoMode || 'one_by_one').toUpperCase().replace(/_/g, ' ')})`
+			: 'DISABLED';
+		const dateStr = new Date(linked.linkedAt).toISOString().slice(0, 10);
 
 		const linkBox =
 			'```prolog\n' +
@@ -320,7 +325,8 @@ export function createLinkEmbed(
 			`│ STATUS     : LINKED\n` +
 			`│ OPERATOR   : @${targetUser.username}\n` +
 			`│ IDENTIFIER : ${targetUser.id}\n` +
-			`│ REGISTRATION : <t:${unixTimestamp}:R>\n` +
+			`│ AUTO-PILOT : ${autoStatus}\n` +
+			`│ ENROLLED   : ${dateStr}\n` +
 			`└──────────────────────────────────────────────┘\n` +
 			'```';
 
@@ -332,6 +338,7 @@ export function createLinkEmbed(
 			.setDescription(
 				`${linkBox}\n` +
 					`Credentials successfully associated. Quests will automatically execute against this session when triggered with **\`/quest start\`** or **\`c?start\`**.\n\n` +
+					`◈ **AUTO-PILOT**: ${linked.autoComplete ? '`ACTIVE` · Background scanner will automatically detect and complete newly dropped quests.' : '`DISABLED` · Click **`AUTO: OFF`** below to automatically complete quests when they arrive.'}\n\n` +
 					`Select **\`INITIALIZE\`** below to dispatch quests immediately.`,
 			)
 			.setFooter({
@@ -361,7 +368,7 @@ export function createLinkEmbed(
 	return embed;
 }
 
-export function createLinkActionRow(isLinked: boolean): ActionRowBuilder<ButtonBuilder> {
+export function createLinkActionRow(isLinked: boolean, autoComplete = false): ActionRowBuilder<ButtonBuilder> {
 	const row = new ActionRowBuilder<ButtonBuilder>();
 
 	if (isLinked) {
@@ -370,6 +377,10 @@ export function createLinkActionRow(isLinked: boolean): ActionRowBuilder<ButtonB
 				.setCustomId('btn_start_linked_quest')
 				.setLabel('INITIALIZE')
 				.setStyle(ButtonStyle.Primary),
+			new ButtonBuilder()
+				.setCustomId('btn_toggle_auto')
+				.setLabel(autoComplete ? 'AUTO: ON' : 'AUTO: OFF')
+				.setStyle(autoComplete ? ButtonStyle.Success : ButtonStyle.Secondary),
 			new ButtonBuilder()
 				.setCustomId('btn_open_link_modal')
 				.setLabel('UPDATE CREDENTIALS')
@@ -509,6 +520,52 @@ export function createModeSelectionActionRow(): ActionRowBuilder<ButtonBuilder> 
 			.setCustomId('btn_mode_all_at_once')
 			.setLabel('ALL AT ONCE')
 			.setStyle(ButtonStyle.Secondary),
+	);
+}
+
+export function createAutoToggleEmbed(
+	account: LinkedAccount,
+	enabled: boolean,
+): EmbedBuilder {
+	const headerBox =
+		'```prolog\n' +
+		`┌── ${toSmallCaps('AUTO-PILOT CONFIGURATION')} ───────────────┐\n` +
+		`│ STATUS     : ${enabled ? 'ENABLED' : 'DISABLED'}\n` +
+		`│ OPERATOR   : @${account.targetUser.username}\n` +
+		`│ IDENTIFIER : ${account.targetUser.id}\n` +
+		`│ STRATEGY   : ${(account.autoMode || 'one_by_one').toUpperCase().replace(/_/g, ' ')}\n` +
+		`│ SCANNER    : ACTIVE (EVERY 20 MINUTES)\n` +
+		'└──────────────────────────────────────────────┘\n' +
+		'```';
+
+	const desc = enabled
+		? `${headerBox}\n` +
+		  `Auto-Pilot is now **ACTIVE** on your account.\n\n` +
+		  `Whenever new Discord Quests arrive, Aerix Quest will automatically detect and complete them in the background.\n` +
+		  `You will receive direct notifications when quests are detected and when rewards are successfully claimed.`
+		: `${headerBox}\n` +
+		  `Auto-Pilot is now **DISABLED** on your account.\n\n` +
+		  `New quests will not be completed automatically. You can initiate tasks manually with **\`/quest start\`** or **\`c?start\`**, or toggle Auto-Pilot back on anytime.`;
+
+	return new EmbedBuilder()
+		.setColor(THEME_PURPLE)
+		.setAuthor({ name: `AERIX QUEST · ${toSmallCaps('AUTO-PILOT CONTROLLER')}` })
+		.setDescription(desc)
+		.setFooter({
+			text: `AERIX QUEST INFRASTRUCTURE · BACKGROUND DAEMON`,
+		});
+}
+
+export function createAutoToggleActionRow(enabled: boolean): ActionRowBuilder<ButtonBuilder> {
+	return new ActionRowBuilder<ButtonBuilder>().addComponents(
+		new ButtonBuilder()
+			.setCustomId('btn_toggle_auto')
+			.setLabel(enabled ? 'AUTO: ON' : 'AUTO: OFF')
+			.setStyle(enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
+		new ButtonBuilder()
+			.setCustomId('btn_start_linked_quest')
+			.setLabel('INITIALIZE NOW')
+			.setStyle(ButtonStyle.Primary),
 	);
 }
 
