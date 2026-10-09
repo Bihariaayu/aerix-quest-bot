@@ -166,7 +166,7 @@ export async function registerCommands(
 	clientId: string,
 	guildIds: string[] = [],
 ): Promise<void> {
-	const rest = new REST({ version: '10' }).setToken(botToken);
+	const rest = new REST({ version: '10', timeout: 30_000 }).setToken(botToken);
 	try {
 		console.log('Registering global application (slash) commands...');
 		await rest.put(Routes.applicationCommands(clientId), {
@@ -192,7 +192,7 @@ export async function clearGuildCommands(
 	clientId: string,
 	guildId: string,
 ): Promise<void> {
-	const rest = new REST({ version: '10' }).setToken(botToken);
+	const rest = new REST({ version: '10', timeout: 30_000 }).setToken(botToken);
 	try {
 		await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
 			body: [],

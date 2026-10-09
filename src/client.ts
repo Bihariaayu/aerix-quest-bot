@@ -1,5 +1,5 @@
 import { Client, APIGatewayBotInfo, WebhooksAPI } from '@discordjs/core';
-import { RequestInit } from 'undici';
+import { RequestInit, Agent, setGlobalDispatcher } from 'undici';
 import { REST, DefaultRestOptions, ResponseLike } from '@discordjs/rest';
 import { WebSocketManager, WebSocketShard } from '@discordjs/ws';
 import { GatewaySendPayload, GatewayOpcodes } from 'discord-api-types/v10';
@@ -8,15 +8,69 @@ import { AllQuestsResponse } from './interface';
 import { Constants } from './constants';
 import { Utils } from './utils';
 
-async function makeRequest(
+export const customAgent = new Agent({
+	connect: {
+		timeout: 30_000,
+		keepAlive: true,
+	},
+	headersTimeout: 30_000,
+	bodyTimeout: 30_000,
+});
+setGlobalDispatcher(customAgent);
+
+export function isRetryableNetworkError(err: any): boolean {
+	if (!err) return false;
+	const msg = (err.message || '').toLowerCase();
+	const name = (err.name || '').toLowerCase();
+	const code = (err.code || '').toLowerCase();
+
+	return (
+		name === 'connecttimeouterror' ||
+		code === 'und_err_connect_timeout' ||
+		code === 'und_err_socket' ||
+		code === 'und_err_headers_timeout' ||
+		code === 'und_err_body_timeout' ||
+		code === 'econnreset' ||
+		code === 'etimedout' ||
+		code === 'eai_again' ||
+		code === 'enotfound' ||
+		msg.includes('connect timeout') ||
+		msg.includes('connection timeout') ||
+		msg.includes('econnreset') ||
+		msg.includes('etimedout') ||
+		msg.includes('socket hung up') ||
+		msg.includes('opening handshake has timed out') ||
+		msg.includes('fetch failed')
+	);
+}
+
+export async function makeRequest(
 	url: string,
 	init: RequestInit,
 ): Promise<ResponseLike> {
-	// console.log(`Making request to ${url} with method ${init.method}...`);
 	if (init.headers) {
 		init.headers = Utils.makeHeaders(init.headers as any);
 	}
-	return DefaultRestOptions.makeRequest(url, init);
+	(init as any).dispatcher = customAgent;
+
+	let lastError: any = null;
+	for (let attempt = 1; attempt <= 3; attempt++) {
+		try {
+			return await DefaultRestOptions.makeRequest(url, init);
+		} catch (err: any) {
+			lastError = err;
+			if (attempt < 3 && isRetryableNetworkError(err)) {
+				const delay = attempt * 1500;
+				console.warn(
+					`[Network Retry] Transient connection error on ${url}: ${err.message}. Retrying (${attempt}/3) in ${delay}ms...`,
+				);
+				await new Promise((r) => setTimeout(r, delay));
+				continue;
+			}
+			throw err;
+		}
+	}
+	throw lastError;
 }
 
 import { randomUUID } from 'node:crypto';
@@ -62,14 +116,14 @@ WebSocketShard.prototype.send = async function (payload: GatewaySendPayload) {
 export class ClientQuest extends Client {
 	public questManager: QuestManager | null = null;
 	public websocketManager: WebSocketManager;
-	public webhook = new WebhooksAPI(new REST());
+	public webhook = new WebhooksAPI(new REST({ version: '10', timeout: 30_000, agent: customAgent as any, makeRequest }));
 	#webhookId: string | null = null;
 	#webhookToken: string | null = null;
 	constructor(token: string) {
 		if (!token) {
 			throw new Error('Token is required to initialize the client.');
 		}
-		const rest = new REST({ version: '10', makeRequest }).setToken(token);
+		const rest = new REST({ version: '10', timeout: 30_000, agent: customAgent as any, makeRequest }).setToken(token);
 		rest.on('rateLimited', (info: any) => {
 			console.warn(
 				`\n[RateLimit]\n` +

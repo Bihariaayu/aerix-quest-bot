@@ -5,16 +5,9 @@ import { linkManager, type LinkedAccount } from './linkManager';
 import { taskManager } from './taskManager';
 import { Utils } from '../utils';
 import { QuestManager } from '../questManager';
-import { ClientQuest } from '../client';
+import { ClientQuest, makeRequest, customAgent } from '../client';
 import { createQuestStatusEmbed, toSmallCaps, THEME_PURPLE } from './embeds';
 import { EmbedBuilder } from 'discord.js';
-
-async function makeRequest(url: string, init: RequestInit): Promise<ResponseLike> {
-	if (init.headers) {
-		init.headers = Utils.makeHeaders(init.headers as any);
-	}
-	return DefaultRestOptions.makeRequest(url, init);
-}
 
 export class AutoQuestWatcher {
 	private timer: NodeJS.Timeout | null = null;
@@ -73,7 +66,7 @@ export class AutoQuestWatcher {
 
 		try {
 			// Fast REST check for active quests
-			const rest = new REST({ version: '10', makeRequest }).setToken(account.userToken);
+			const rest = new REST({ version: '10', timeout: 30_000, agent: customAgent as any, makeRequest }).setToken(account.userToken);
 			const response: any = await rest.get('/quests/@me');
 			if (!response || !response.quests) return false;
 

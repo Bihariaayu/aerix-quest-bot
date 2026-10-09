@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { GatewayDispatchEvents } from 'discord-api-types/v10';
 import { EmbedBuilder, Client as DiscordClient } from 'discord.js';
-import { ClientQuest } from '../client';
+import { ClientQuest, isRetryableNetworkError } from '../client';
 import { Utils } from '../utils';
 import { linkManager } from './linkManager';
 import { toSmallCaps, THEME_PURPLE } from './embeds';
@@ -436,7 +436,28 @@ export class TaskManager {
 					if (questItem) questItem.status = 'in_progress';
 					task.onUpdate?.(task);
 					try {
-						await client!.questManager!.doingQuest(quest);
+						let lastError: any = null;
+						for (let attempt = 1; attempt <= 2; attempt++) {
+							try {
+								await client!.questManager!.doingQuest(quest);
+								lastError = null;
+								break;
+							} catch (err: any) {
+								lastError = err;
+								if (attempt < 2 && isRetryableNetworkError(err) && !this.isCancelled(task)) {
+									console.warn(`[TaskManager] Network timeout on quest "${quest.config.messages.quest_name}", auto-retrying in 3s...`);
+									if (questItem) {
+										questItem.details = `Connection timeout, retrying...`;
+										task.onUpdate?.(task);
+									}
+									await new Promise((r) => setTimeout(r, 3000));
+									continue;
+								}
+								break;
+							}
+						}
+						if (lastError) throw lastError;
+
 						if (questItem && quest.isCompleted()) {
 							questItem.status = 'completed';
 							questItem.percent = 100;
@@ -459,7 +480,28 @@ export class TaskManager {
 						if (questItem) questItem.status = 'in_progress';
 						task.onUpdate?.(task);
 						try {
-							await client!.questManager!.doingQuest(quest);
+							let lastError: any = null;
+							for (let attempt = 1; attempt <= 2; attempt++) {
+								try {
+									await client!.questManager!.doingQuest(quest);
+									lastError = null;
+									break;
+								} catch (err: any) {
+									lastError = err;
+									if (attempt < 2 && isRetryableNetworkError(err) && !this.isCancelled(task)) {
+										console.warn(`[TaskManager] Network timeout on quest "${quest.config.messages.quest_name}", auto-retrying in 3s...`);
+										if (questItem) {
+											questItem.details = `Connection timeout, retrying...`;
+											task.onUpdate?.(task);
+										}
+										await new Promise((r) => setTimeout(r, 3000));
+										continue;
+									}
+									break;
+								}
+							}
+							if (lastError) throw lastError;
+
 							if (questItem && quest.isCompleted()) {
 								questItem.status = 'completed';
 								questItem.percent = 100;

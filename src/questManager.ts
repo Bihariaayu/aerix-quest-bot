@@ -423,6 +423,7 @@ export class QuestManager implements Iterable<Quest> {
 			quest.userStatus?.enrolled_at as any,
 		).getTime();
 		let completed = false;
+		let consecutiveErrors = 0;
 		let fn = async () => {
 			while (!this.client.isAborted) {
 				const maxAllowed =
@@ -430,30 +431,41 @@ export class QuestManager implements Iterable<Quest> {
 				const diff = maxAllowed - secondsDone;
 				const timestamp = secondsDone + speed;
 				if (diff >= speed) {
-					const res = (await this.client.rest.post(
-						`/quests/${quest.id}/video-progress`,
-						{
-							body: {
-								timestamp: Math.min(
-									secondsNeeded,
-									timestamp + Math.random(),
-								),
+					try {
+						const res = (await this.client.rest.post(
+							`/quests/${quest.id}/video-progress`,
+							{
+								body: {
+									timestamp: Math.min(
+										secondsNeeded,
+										timestamp + Math.random(),
+									),
+								},
 							},
-						},
-					)) as any;
-					completed = res.completed_at != null;
-					secondsDone = Math.min(secondsNeeded, timestamp);
-					const percent = Math.min(100, Math.round((secondsDone / secondsNeeded) * 100));
-					this.client.emitProgress({
-						type: 'progress',
-						questId: quest.id,
-						questName,
-						taskName: 'WATCH_VIDEO',
-						secondsDone,
-						secondsNeeded,
-						percent,
-						message: `Watching video for "${questName}" (${percent}% - ${secondsDone}s/${secondsNeeded}s)`,
-					});
+						)) as any;
+						consecutiveErrors = 0;
+						completed = res.completed_at != null;
+						secondsDone = Math.min(secondsNeeded, timestamp);
+						const percent = Math.min(100, Math.round((secondsDone / secondsNeeded) * 100));
+						this.client.emitProgress({
+							type: 'progress',
+							questId: quest.id,
+							questName,
+							taskName: 'WATCH_VIDEO',
+							secondsDone,
+							secondsNeeded,
+							percent,
+							message: `Watching video for "${questName}" (${percent}% - ${secondsDone}s/${secondsNeeded}s)`,
+						});
+					} catch (err: any) {
+						consecutiveErrors++;
+						console.warn(
+							`[Video Progress] Transient network error (${consecutiveErrors}/5) for "${questName}": ${err?.message || err}`,
+						);
+						if (consecutiveErrors >= 5) {
+							throw err;
+						}
+					}
 				}
 
 				if (timestamp >= secondsNeeded || completed) {
@@ -463,12 +475,21 @@ export class QuestManager implements Iterable<Quest> {
 			}
 			if (this.client.isAborted) return;
 			if (!completed) {
-				await this.client.rest.post(
-					`/quests/${quest.id}/video-progress`,
-					{
-						body: { timestamp: secondsNeeded },
-					},
-				);
+				for (let attempt = 1; attempt <= 3; attempt++) {
+					try {
+						await this.client.rest.post(
+							`/quests/${quest.id}/video-progress`,
+							{
+								body: { timestamp: secondsNeeded },
+							},
+						);
+						break;
+					} catch (err: any) {
+						if (attempt === 3) throw err;
+						console.warn(`[Video Terminal] Retrying terminal progress (attempt ${attempt}/3): ${err.message}`);
+						await this.timeout(2000);
+					}
+				}
 			}
 			console.log(`Quest "${questName}" completed!`);
 			this.client.emitQuestCompleted(quest.id, questName);
@@ -484,47 +505,68 @@ export class QuestManager implements Iterable<Quest> {
 		applicationName: string,
 	) {
 		const interval = 20;
+		let consecutiveErrors = 0;
 		while (!quest.isCompleted() && !this.client.isAborted) {
 			const secondsDone =
 				(quest.userStatus?.progress?.[taskName]?.value as number) || 0;
-			const res = await this.client.rest.post(
-				`/quests/${quest.id}/heartbeat`,
-				{
-					body: {
-						application_id: quest.config.application.id,
-						terminal: false,
+			try {
+				const res = await this.client.rest.post(
+					`/quests/${quest.id}/heartbeat`,
+					{
+						body: {
+							application_id: quest.config.application.id,
+							terminal: false,
+						},
 					},
-				},
-			);
-			quest.updateUserStatus(res as any);
-			const minutesLeft = Math.max(0, Math.ceil((secondsNeeded - secondsDone) / 60));
-			const percent = Math.min(100, Math.round((secondsDone / secondsNeeded) * 100));
-			console.log(
-				`Spoofed your game to ${applicationName}. Wait for ${minutesLeft} more minute(s).`,
-			);
-			this.client.emitProgress({
-				type: 'progress',
-				questId: quest.id,
-				questName,
-				taskName,
-				secondsDone,
-				secondsNeeded,
-				percent,
-				message: `Playing ${applicationName} (${percent}% - ${minutesLeft}m left)`,
-			});
+				);
+				consecutiveErrors = 0;
+				quest.updateUserStatus(res as any);
+				const minutesLeft = Math.max(0, Math.ceil((secondsNeeded - secondsDone) / 60));
+				const percent = Math.min(100, Math.round((secondsDone / secondsNeeded) * 100));
+				console.log(
+					`Spoofed your game to ${applicationName}. Wait for ${minutesLeft} more minute(s).`,
+				);
+				this.client.emitProgress({
+					type: 'progress',
+					questId: quest.id,
+					questName,
+					taskName,
+					secondsDone,
+					secondsNeeded,
+					percent,
+					message: `Playing ${applicationName} (${percent}% - ${minutesLeft}m left)`,
+				});
+			} catch (err: any) {
+				consecutiveErrors++;
+				console.warn(
+					`[Game Heartbeat] Transient error (${consecutiveErrors}/5) for ${applicationName}: ${err?.message || err}`,
+				);
+				if (consecutiveErrors >= 5) {
+					throw err;
+				}
+			}
 			await this.timeout(interval * 1000);
 		}
 		if (this.client.isAborted) return;
-		const res = await this.client.rest.post(
-			`/quests/${quest.id}/heartbeat`,
-			{
-				body: {
-					application_id: quest.config.application.id,
-					terminal: true,
-				},
-			},
-		);
-		quest.updateUserStatus(res as any);
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			try {
+				const res = await this.client.rest.post(
+					`/quests/${quest.id}/heartbeat`,
+					{
+						body: {
+							application_id: quest.config.application.id,
+							terminal: true,
+						},
+					},
+				);
+				quest.updateUserStatus(res as any);
+				break;
+			} catch (err: any) {
+				if (attempt === 3) throw err;
+				console.warn(`[Game Terminal] Retrying terminal heartbeat (attempt ${attempt}/3): ${err.message}`);
+				await this.timeout(2000);
+			}
+		}
 		console.log(`Quest "${questName}" completed!`);
 		this.client.emitQuestCompleted(quest.id, questName);
 	}
@@ -537,41 +579,62 @@ export class QuestManager implements Iterable<Quest> {
 	) {
 		const interval = 20;
 		const streamKey = 'call:1:1'; // Todo: call:channel_id:user_id | guild:guild_id:channel_id:user_id
+		let consecutiveErrors = 0;
 		while (!quest.isCompleted() && !this.client.isAborted) {
 			const secondsDone =
 				(quest.userStatus?.progress?.[taskName]?.value as number) || 0;
-			const res = await this.client.rest.post(
-				`/quests/${quest.id}/heartbeat`,
-				{
-					body: { stream_key: streamKey, terminal: false },
-				},
-			);
-			quest.updateUserStatus(res as any);
-			const minutesLeft = Math.max(0, Math.ceil((secondsNeeded - secondsDone) / 60));
-			const percent = Math.min(100, Math.round((secondsDone / secondsNeeded) * 100));
-			console.log(
-				`Spoofed your activity to ${applicationName}. Wait for ${minutesLeft} more minute(s).`,
-			);
-			this.client.emitProgress({
-				type: 'progress',
-				questId: quest.id,
-				questName,
-				taskName,
-				secondsDone,
-				secondsNeeded,
-				percent,
-				message: `Activity ${applicationName} (${percent}% - ${minutesLeft}m left)`,
-			});
+			try {
+				const res = await this.client.rest.post(
+					`/quests/${quest.id}/heartbeat`,
+					{
+						body: { stream_key: streamKey, terminal: false },
+					},
+				);
+				consecutiveErrors = 0;
+				quest.updateUserStatus(res as any);
+				const minutesLeft = Math.max(0, Math.ceil((secondsNeeded - secondsDone) / 60));
+				const percent = Math.min(100, Math.round((secondsDone / secondsNeeded) * 100));
+				console.log(
+					`Spoofed your activity to ${applicationName}. Wait for ${minutesLeft} more minute(s).`,
+				);
+				this.client.emitProgress({
+					type: 'progress',
+					questId: quest.id,
+					questName,
+					taskName,
+					secondsDone,
+					secondsNeeded,
+					percent,
+					message: `Activity ${applicationName} (${percent}% - ${minutesLeft}m left)`,
+				});
+			} catch (err: any) {
+				consecutiveErrors++;
+				console.warn(
+					`[Activity Heartbeat] Transient error (${consecutiveErrors}/5) for ${applicationName}: ${err?.message || err}`,
+				);
+				if (consecutiveErrors >= 5) {
+					throw err;
+				}
+			}
 			await this.timeout(interval * 1000);
 		}
 		if (this.client.isAborted) return;
-		const res = await this.client.rest.post(
-			`/quests/${quest.id}/heartbeat`,
-			{
-				body: { stream_key: streamKey, terminal: true },
-			},
-		);
-		quest.updateUserStatus(res as any);
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			try {
+				const res = await this.client.rest.post(
+					`/quests/${quest.id}/heartbeat`,
+					{
+						body: { stream_key: streamKey, terminal: true },
+					},
+				);
+				quest.updateUserStatus(res as any);
+				break;
+			} catch (err: any) {
+				if (attempt === 3) throw err;
+				console.warn(`[Activity Terminal] Retrying terminal heartbeat (attempt ${attempt}/3): ${err.message}`);
+				await this.timeout(2000);
+			}
+		}
 		console.log(`Quest "${questName}" completed!`);
 		this.client.emitQuestCompleted(quest.id, questName);
 	}
