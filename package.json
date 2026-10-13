@@ -4,7 +4,7 @@
   "description": "demo",
   "main": "index.js",
   "scripts": {
-    "start": "tsx --env-file=.env bot.ts",
+    "start": "tsx bot.ts",
     "bot": "tsx --env-file=.env src/bot/index.ts",
     "selfbot": "tsx --env-file=.env bot.ts",
     "dev": "tsx --env-file=.env --inspect-brk bot.ts",
